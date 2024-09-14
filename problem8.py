@@ -1,100 +1,124 @@
+import os
 import numpy as np
+import librosa
 import tensorflow as tf
-from tensorflow.keras import layers, models # type: ignore
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras import layers, models
 import matplotlib.pyplot as plt
 
-# Generate synthetic data for digits 1 to 5
-def generate_synthetic_data(num_samples=1000):
-    X = np.zeros((num_samples, 5, 5, 1), dtype=np.float32)  # Black and white images
-    y = np.zeros(num_samples, dtype=np.int)  # Labels
+# Function to load audio data and extract MFCC features
+def load_audio_data(data_dir):
+    X = []
+    y = []
+    labels = os.listdir(data_dir)
     
-    for i in range(num_samples):
-        digit = np.random.randint(1, 6)  # Random digit from 1 to 5
-        y[i] = digit - 1  # Convert to zero-based index
-        
-        # Create a simple pattern for the digit (this is just for demonstration)
-        if digit == 1:
-            X[i, :, :, 0] = np.array([[0, 0, 1, 0, 0],
-                                      [0, 1, 1, 0, 0],
-                                      [0, 1, 1, 0, 0],
-                                      [0, 1, 1, 0, 0],
-                                      [0, 1, 1, 0, 0]], dtype=np.float32)
-        elif digit == 2:
-            X[i, :, :, 0] = np.array([[1, 1, 1, 1, 0],
-                                      [0, 0, 0, 1, 0],
-                                      [0, 1, 1, 0, 0],
-                                      [1, 1, 0, 0, 0],
-                                      [1, 1, 1, 1, 1]], dtype=np.float32)
-        elif digit == 3:
-            X[i, :, :, 0] = np.array([[1, 1, 1, 1, 0],
-                                      [0, 0, 1, 1, 0],
-                                      [0, 1, 1, 1, 0],
-                                      [0, 0, 1, 1, 0],
-                                      [1, 1, 1, 1, 0]], dtype=np.float32)
-        elif digit == 4:
-            X[i, :, :, 0] = np.array([[1, 0, 0, 1, 0],
-                                      [1, 0, 0, 1, 0],
-                                      [1, 1, 1, 1, 0],
-                                      [0, 0, 0, 1, 0],
-                                      [0, 0, 0, 1, 0]], dtype=np.float32)
-        elif digit == 5:
-            X[i, :, :, 0] = np.array([[1, 1, 1, 1, 1],
-                                      [1, 0, 0, 0, 0],
-                                      [1, 1, 1, 1, 0],
-                                      [0, 0, 0, 0, 1],
-                                      [1, 1, 1, 1, 0]], dtype=np.float32)
+    for label in labels:
+        label_dir = os.path.join(data_dir, label)
+        for file_name in os.listdir(label_dir):
+            file_path = os.path.join(label_dir, file_name)
+            # Load the audio file
+            audio, sample_rate = librosa.load(file_path, sr=None)
+            
+            # Extract MFCC features
+            mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)
+            mfccs = np.mean(mfccs.T, axis=0)  # Taking the mean of MFCC features across time
+            X.append(mfccs)
+            y.append(label)
     
-    y = tf.keras.utils.to_categorical(y, num_classes=5)
-    return X, y
+    return np.array(X), np.array(y)
 
-# Generate data
-X, y = generate_synthetic_data()
+# Function to process the recorded audio and extract MFCC features
+def extract_mfcc_from_audio(audio, sample_rate, n_mfcc=13):
+    mfccs = librosa.feature.mfcc(y=audio.flatten(), sr=sample_rate, n_mfcc=n_mfcc)
+    mfccs = np.mean(mfccs.T, axis=0)  # Take the mean across time axis
+    return mfccs.reshape(1, -1)  # Return as a 2D array for model input
 
-# Define CNN architecture
+# Function to predict a digit from a sample audio file
+def predict_digit_from_file(model, le, file_path):
+    audio, sample_rate = librosa.load(file_path, sr=None)  # Load the sample audio file
+    mfccs = extract_mfcc_from_audio(audio, sample_rate)
+    prediction = model.predict(mfccs)
+    predicted_label = np.argmax(prediction)
+    
+    # Ensure predicted label is within valid range
+    if predicted_label >= len(le.classes_):
+        raise ValueError(f"Predicted label {predicted_label} is out of bounds. Expected range: [0, {len(le.classes_)-1}]")
+    
+    print(f"Predicted label from file: {le.inverse_transform([predicted_label])[0]}")
+    return predicted_label
+
+# Set paths to your dataset
+data_dir = r'E:\Course\4-2\Neural Networks-MIH\Sessional\My Code\Audio'  # Dataset directory with subfolders for each class (1 to 4)
+
+# Load the audio data and their corresponding labels
+X, y = load_audio_data(data_dir)
+
+# Encode the labels to integers
+le = LabelEncoder()
+y_encoded = le.fit_transform(y)
+
+# Check if the encoding is within valid range
+if not np.all(np.isin(y_encoded, np.arange(4))):
+    raise ValueError("Encoded labels are out of bounds. Expected range: [0, 3]")
+
+# Split the dataset into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42)
+
+# Build the ANN model
 model = models.Sequential([
-    layers.InputLayer(input_shape=(5, 5, 1)),
-
-    layers.Conv2D(16, (3, 3), padding='valid', activation='relu'),
-    layers.MaxPooling2D((2, 2)),
-
-    layers.Flatten(),
+    layers.InputLayer(input_shape=(13,)),  # 13 MFCC coefficients
     layers.Dense(64, activation='relu'),
-    layers.Dense(5, activation='softmax')  # 5 classes for digits 1 to 5
+    layers.Dense(32, activation='relu'),
+    layers.Dense(4, activation='softmax')  # 4 output classes (numbers 0 to 3)
 ])
 
 # Compile the model
-model.compile(optimizer='adam',
-              loss='categorical_crossentropy',
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+              loss='sparse_categorical_crossentropy',
               metrics=['accuracy'])
 
-# Train the CNN
-history = model.fit(X, y, epochs=10, batch_size=32, validation_split=0.2)
+# Train the ANN model
+history = model.fit(X_train, y_train, epochs=20, validation_data=(X_test, y_test), batch_size=16)
+
+# Evaluate the model
+test_loss, test_acc = model.evaluate(X_test, y_test)
+print(f"Test accuracy: {test_acc:.2f}")
 
 # Save the trained model
-model_save_path = 'digit_recognition_model.h5'
+model_save_path = r'E:\Course\4-2\Neural Networks-MIH\Sessional\My Code\speech_model.h5'
 model.save(model_save_path)
 
-# Load and preprocess a random sample image for classification
-def predict_and_display(image):
-    image = np.expand_dims(image, axis=0)  # Add batch dimension
-    prediction = model.predict(image)
-    predicted_class = np.argmax(prediction)
-    return predicted_class + 1  # Convert back to digit (1 to 5)
+# Plot training and validation accuracy and loss curves
+def plot_history(history):
+    acc = history.history['accuracy']
+    val_acc = history.history['val_accuracy']
+    loss = history.history['loss']
+    val_loss = history.history['val_loss']
+    epochs = range(1, len(acc) + 1)
+    
+    # Plot accuracy
+    plt.figure()
+    plt.plot(epochs, acc, 'bo-', label='Training accuracy')
+    plt.plot(epochs, val_acc, 'ro-', label='Validation accuracy')
+    plt.title('Training and Validation Accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.show()
 
-# Create a sample test image
-test_image = np.array([[1, 1, 1, 1, 1],
-                       [1, 0, 0, 0, 0],
-                       [1, 1, 1, 1, 0],
-                       [0, 0, 0, 0, 1],
-                       [1, 1, 1, 1, 0]], dtype=np.float32)
-test_image = np.expand_dims(test_image, axis=-1)  # Add channel dimension
+    # Plot loss
+    plt.figure()
+    plt.plot(epochs, loss, 'bo-', label='Training loss')
+    plt.plot(epochs, val_loss, 'ro-', label='Validation loss')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
 
-# Predict and display result
-predicted_digit = predict_and_display(test_image)
-print(f'Predicted digit: {predicted_digit}')
+plot_history(history)
 
-# Display the test image
-plt.imshow(test_image.squeeze(), cmap='gray')
-plt.title(f'Predicted: {predicted_digit}')
-plt.axis('off')
-plt.show()
+# Predict a digit from a sample audio file
+sample_audio_file = r'E:\Course\4-2\Neural Networks-MIH\Sessional\My Code\Sample\sample2.wav'
+predicted_digit = predict_digit_from_file(model, le, sample_audio_file)
